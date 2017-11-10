@@ -1,6 +1,3 @@
-Note: This is a fork of https://github.com/go-yaml/yaml. The following README
-doesn't necessarily apply to this fork.
-
 # YAML support for the Go language
 
 Introduction
@@ -23,33 +20,35 @@ supported since they're a poor design and are gone in YAML 1.2.
 Installation and usage
 ----------------------
 
-The import path for the package is *gopkg.in/yaml.v1*.
+The import path for the package is *gopkg.in/yaml.v2*.
 
 To install it, run:
 
-    go get gopkg.in/yaml.v1
+    go get gopkg.in/yaml.v2
 
 API documentation
 -----------------
 
 If opened in a browser, the import path itself leads to the API documentation:
 
-  * [https://gopkg.in/yaml.v1](https://gopkg.in/yaml.v1)
+  * [https://gopkg.in/yaml.v2](https://gopkg.in/yaml.v2)
 
 API stability
 -------------
 
-The package API for yaml v1 will remain stable as described in [gopkg.in](https://gopkg.in).
+The package API for yaml v2 will remain stable as described in [gopkg.in](https://gopkg.in).
 
 
 License
 -------
 
-The yaml package is licensed under the LGPL with an exception that allows it to be linked statically. Please see the LICENSE file for details.
+The yaml package is licensed under the Apache License 2.0. Please see the LICENSE file for details.
 
 
 Example
 -------
+
+Some more examples can be found in the "examples" folder.
 
 ```Go
 package main
@@ -58,7 +57,7 @@ import (
         "fmt"
         "log"
 
-        "gopkg.in/yaml.v1"
+        "gopkg.in/yaml.v2"
 )
 
 var data = `
@@ -70,7 +69,10 @@ b:
 
 type T struct {
         A string
-        B struct{C int; D []int ",flow"}
+        B struct {
+                RenamedC int   `yaml:"c"`
+                D        []int `yaml:",flow"`
+        }
 }
 
 func main() {

@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coreos/yaml"
 	. "gopkg.in/check.v1"
+	"gopkg.in/yaml.v2"
+	"net"
+	"os"
 )
 
 var marshalIntTest = 123
@@ -165,10 +167,35 @@ var marshalTests = []struct {
 		"{}\n",
 	}, {
 		&struct {
-			A *struct{ X int } "a,omitempty"
-			B int              "b,omitempty"
-		}{nil, 0},
+			A *struct{ X, y int } "a,omitempty,flow"
+		}{&struct{ X, y int }{1, 2}},
+		"a: {x: 1}\n",
+	}, {
+		&struct {
+			A *struct{ X, y int } "a,omitempty,flow"
+		}{nil},
 		"{}\n",
+	}, {
+		&struct {
+			A *struct{ X, y int } "a,omitempty,flow"
+		}{&struct{ X, y int }{}},
+		"a: {x: 0}\n",
+	}, {
+		&struct {
+			A struct{ X, y int } "a,omitempty,flow"
+		}{struct{ X, y int }{1, 2}},
+		"a: {x: 1}\n",
+	}, {
+		&struct {
+			A struct{ X, y int } "a,omitempty,flow"
+		}{struct{ X, y int }{0, 1}},
+		"{}\n",
+	}, {
+		&struct {
+			A float64 "a,omitempty"
+			B float64 "b,omitempty"
+		}{1, 0},
+		"a: 1\n",
 	},
 
 	// Flow flag
@@ -218,6 +245,15 @@ var marshalTests = []struct {
 		"a: 1\nb: 2\nc: 3\n",
 	},
 
+	// Map inlining
+	{
+		&struct {
+			A int
+			C map[string]int `yaml:",inline"`
+		}{1, map[string]int{"b": 2, "c": 3}},
+		"a: 1\nb: 2\nc: 3\n",
+	},
+
 	// Duration
 	{
 		map[string]time.Duration{"a": 3 * time.Second},
@@ -247,19 +283,50 @@ var marshalTests = []struct {
 	}, {
 		map[string]string{"a": strings.Repeat("\x90", 54)},
 		"a: !!binary |\n  " + strings.Repeat("kJCQ", 17) + "kJ\n  CQ\n",
-	}, {
-		map[string]interface{}{"a": typeWithGetter{"!!str", "\x80\x81\x82"}},
-		"a: !!binary gIGC\n",
 	},
 
-	// Escaping of tags.
+	// Ordered maps.
 	{
-		map[string]interface{}{"a": typeWithGetter{"foo!bar", 1}},
-		"a: !<foo%21bar> 1\n",
+		&yaml.MapSlice{{"b", 2}, {"a", 1}, {"d", 4}, {"c", 3}, {"sub", yaml.MapSlice{{"e", 5}}}},
+		"b: 2\na: 1\nd: 4\nc: 3\nsub:\n  e: 5\n",
+	},
+
+	// Encode unicode as utf-8 rather than in escaped form.
+	{
+		map[string]string{"a": "你好"},
+		"a: 你好\n",
+	},
+
+	// Support encoding.TextMarshaler.
+	{
+		map[string]net.IP{"a": net.IPv4(1, 2, 3, 4)},
+		"a: 1.2.3.4\n",
+	},
+	{
+		map[string]time.Time{"a": time.Unix(1424801979, 0)},
+		"a: 2015-02-24T18:19:39Z\n",
+	},
+
+	// Ensure strings containing ": " are quoted (reported as PR #43, but not reproducible).
+	{
+		map[string]string{"a": "b: c"},
+		"a: 'b: c'\n",
+	},
+
+	// Containing hash mark ('#') in string should be quoted
+	{
+		map[string]string{"a": "Hello #comment"},
+		"a: 'Hello #comment'\n",
+	},
+	{
+		map[string]string{"a": "你好 #comment"},
+		"a: '你好 #comment'\n",
 	},
 }
 
 func (s *S) TestMarshal(c *C) {
+	defer os.Setenv("TZ", os.Getenv("TZ"))
+	os.Setenv("TZ", "UTC")
 	for _, item := range marshalTests {
 		data, err := yaml.Marshal(item.value)
 		c.Assert(err, IsNil)
@@ -278,11 +345,11 @@ var marshalErrorTests = []struct {
 	}{1, inlineB{2, inlineC{3}}},
 	panic: `Duplicated key 'b' in struct struct \{ B int; .*`,
 }, {
-	value: typeWithGetter{"!!binary", "\x80"},
-	error: "YAML error: explicitly tagged !!binary data must be base64-encoded",
-}, {
-	value: typeWithGetter{"!!float", "\x80"},
-	error: `YAML error: cannot marshal invalid UTF-8 data as !!float`,
+	value: &struct {
+		A int
+		B map[string]int ",inline"
+	}{1, map[string]int{"a": 2}},
+	panic: `Can't have key "a" in inlined map; conflicts with struct field`,
 }}
 
 func (s *S) TestMarshalErrors(c *C) {
@@ -294,28 +361,6 @@ func (s *S) TestMarshalErrors(c *C) {
 			c.Assert(err, ErrorMatches, item.error)
 		}
 	}
-}
-
-var marshalTaggedIfaceTest interface{} = &struct{ A string }{"B"}
-
-var getterTests = []struct {
-	data, tag string
-	value     interface{}
-}{
-	{"_:\n  hi: there\n", "", map[interface{}]interface{}{"hi": "there"}},
-	{"_:\n- 1\n- A\n", "", []interface{}{1, "A"}},
-	{"_: 10\n", "", 10},
-	{"_: null\n", "", nil},
-	{"_: !foo BAR!\n", "!foo", "BAR!"},
-	{"_: !foo 1\n", "!foo", "1"},
-	{"_: !foo '\"1\"'\n", "!foo", "\"1\""},
-	{"_: !foo 1.1\n", "!foo", 1.1},
-	{"_: !foo 1\n", "!foo", 1},
-	{"_: !foo 1\n", "!foo", uint(1)},
-	{"_: !foo true\n", "!foo", true},
-	{"_: !foo\n- A\n- B\n", "!foo", []string{"A", "B"}},
-	{"_: !foo\n  A: B\n", "!foo", map[string]string{"A": "B"}},
-	{"_: !foo\n  a: B\n", "!foo", &marshalTaggedIfaceTest},
 }
 
 func (s *S) TestMarshalTypeCache(c *C) {
@@ -334,23 +379,36 @@ func (s *S) TestMarshalTypeCache(c *C) {
 	c.Assert(string(data), Equals, "b: 0\n")
 }
 
-type typeWithGetter struct {
-	tag   string
+var marshalerTests = []struct {
+	data  string
+	value interface{}
+}{
+	{"_:\n  hi: there\n", map[interface{}]interface{}{"hi": "there"}},
+	{"_:\n- 1\n- A\n", []interface{}{1, "A"}},
+	{"_: 10\n", 10},
+	{"_: null\n", nil},
+	{"_: BAR!\n", "BAR!"},
+}
+
+type marshalerType struct {
 	value interface{}
 }
 
-func (o typeWithGetter) GetYAML() (tag string, value interface{}) {
-	return o.tag, o.value
+func (o marshalerType) MarshalText() ([]byte, error) {
+	panic("MarshalText called on type with MarshalYAML")
 }
 
-type typeWithGetterField struct {
-	Field typeWithGetter "_"
+func (o marshalerType) MarshalYAML() (interface{}, error) {
+	return o.value, nil
 }
 
-func (s *S) TestMashalWithGetter(c *C) {
-	for _, item := range getterTests {
-		obj := &typeWithGetterField{}
-		obj.Field.tag = item.tag
+type marshalerValue struct {
+	Field marshalerType "_"
+}
+
+func (s *S) TestMarshaler(c *C) {
+	for _, item := range marshalerTests {
+		obj := &marshalerValue{}
 		obj.Field.value = item.value
 		data, err := yaml.Marshal(obj)
 		c.Assert(err, IsNil)
@@ -358,13 +416,23 @@ func (s *S) TestMashalWithGetter(c *C) {
 	}
 }
 
-func (s *S) TestUnmarshalWholeDocumentWithGetter(c *C) {
-	obj := &typeWithGetter{}
-	obj.tag = ""
+func (s *S) TestMarshalerWholeDocument(c *C) {
+	obj := &marshalerType{}
 	obj.value = map[string]string{"hello": "world!"}
 	data, err := yaml.Marshal(obj)
 	c.Assert(err, IsNil)
 	c.Assert(string(data), Equals, "hello: world!\n")
+}
+
+type failingMarshaler struct{}
+
+func (ft *failingMarshaler) MarshalYAML() (interface{}, error) {
+	return nil, failingErr
+}
+
+func (s *S) TestMarshalerError(c *C) {
+	_, err := yaml.Marshal(&failingMarshaler{})
+	c.Assert(err, Equals, failingErr)
 }
 
 func (s *S) TestSortedOutput(c *C) {
